@@ -1351,10 +1351,9 @@ if (!S) S = {};
 /* Migrate legacy state cleanly into weekly & per-day keyed structures */
 function initOrMigrate() {
   const curWk = isoWeekKey(), curDay = new Date().toDateString(), todayIdx = wd();
-  S.goal = S.goal || 1800;
+  S.goal = S.goal === 1800 && S.v !== 4 ? 0 : (S.goal || 0);
   S.done = S.done || {};
   S.eat = S.eat || {};
-  S.burns = S.burns || {};
   S.waters = S.waters || {};
   S.mealsByDay = S.mealsByDay || {};
   S.notes = S.notes || {};
@@ -1366,7 +1365,6 @@ function initOrMigrate() {
 
   /* Migrate old flat burn, water, meals to today's index if upgrading from v3 */
   if (S.v !== 4) {
-    if (typeof S.burn === 'number' && S.burn > 0) S.burns[todayIdx] = S.burn;
     if (typeof S.water === 'number' && S.water > 0) S.waters[todayIdx] = S.water;
     if (Array.isArray(S.meals) && S.meals.length) S.mealsByDay[todayIdx] = S.meals;
     S.v = 4;
@@ -1378,7 +1376,7 @@ function initOrMigrate() {
   const okIdx = v => Number.isInteger(v) && v >= 0 && v <= 6;
   if (!okIdx(S.pd)) S.pd = todayIdx;
   if (!okIdx(S.mp)) S.mp = todayIdx;
-  if (!(S.goal >= 1200 && S.goal <= 4000)) S.goal = 1800;
+  if (S.goal !== 0 && !(S.goal >= 1200 && S.goal <= 4000)) S.goal = 0;
 }
 initOrMigrate();
 
@@ -1390,12 +1388,10 @@ function roll() {
     S.archive[S.wk] = {
       done: { ...S.done },
       eat: { ...S.eat },
-      burns: { ...S.burns },
       waters: { ...S.waters }
     };
     S.done = {};
     S.eat = {};
-    S.burns = {};
     S.waters = {};
     S.mealsByDay = {};
     S.swaps = {};
@@ -1649,6 +1645,14 @@ function dayNut(day, onlyEaten) {
     NK.forEach(k => t[k] += n[k]);
     if (n.cu) t.cu = 1;
   }
+  if (onlyEaten) {
+    (S.mealsByDay[day] || []).forEach(m => {
+      t.kcal += m.k || 0;
+      t.p += m.p || 0;
+      t.c += m.c || 0;
+      t.f += m.f || 0;
+    });
+  }
   return t;
 }
 const MIC = [['fib', 'Fiber', 'g', 1, 25], ['ca', 'Calcium', 'mg', 0, 1000], ['fe', 'Iron', 'mg', 1, 18], ['mg', 'Magnesium', 'mg', 0, 310], ['k', 'Potassium', 'mg', 0, 2600], ['zn', 'Zinc', 'mg', 1, 8], ['b12', 'Vitamin B12', 'µg', 1, 2.4]];
@@ -1717,7 +1721,7 @@ function updateStatsOnly() {
 
   const T = DT[S.mp],
         mc = [0, 1, 2, 3, 4].reduce((t, i) => t + (S.eat[S.mp + '-' + i] ? 1 : 0), 0),
-        targetK = S.goal && S.goal !== 1800 ? S.goal : T.k;
+        targetK = S.goal >= 1200 ? S.goal : T.k;
 
   $('#c2').textContent = mc + '/5';
   $('#c2').nextElementSibling.textContent = mc === 5 ? 'all eaten 🎉' : 'meals eaten';
@@ -1785,7 +1789,7 @@ function renderConsistencyAndWeight() {
   }).join('');
   $('#wkstrk').textContent = `🔥 ${activeDays}/7 days active`;
 
-  const wts = S.weights || [];
+  const wts = [...(S.weights || [])].sort(wcmp);
   if (!wts.length) {
     $('#wtval').textContent = '-- kg';
     $('#wtspark').innerHTML = `<line x1="4" y1="18" x2="136" y2="18" stroke="var(--sep)" stroke-dasharray="3 3" stroke-width="1.5"/>`;
@@ -2003,12 +2007,6 @@ const SS = Spring(460, y => {
 });
 
 const SH = {
-  burn: {
-    t: 'Calories burned (' + WK[S.pd || 0] + ')',
-    p: [['+150 kcal', 150], ['+250 kcal', 250], ['+350 kcal', 350], ['Clear', 0]],
-    f: () => [{ l: `Kcal burned on ${WK[S.pd]}`, n: 1, val: S.burns[S.pd] || '' }],
-    ok: v => { S.burns[S.pd] = +v[0] || 0; showToast('Burned calories saved 🔥'); }
-  },
   meal: {
     t: 'Log extra food',
     p: [
@@ -2036,22 +2034,22 @@ const SH = {
         id: Date.now(),
         t: $('#sh_m').value,
         n,
-        k: +$('#sh_k').value || 0,
-        p: +$('#sh_p').value || 0,
-        c: +$('#sh_c').value || 0,
-        f: +$('#sh_f').value || 0
+        k: Math.max(0, +$('#sh_k').value || 0),
+        p: Math.max(0, +$('#sh_p').value || 0),
+        c: Math.max(0, +$('#sh_c').value || 0),
+        f: Math.max(0, +$('#sh_f').value || 0)
       });
       showToast('Added to ' + WK[S.mp] + ' ✨');
     }
   },
   goal: {
     t: 'Daily calorie goal',
-    p: [['Plan Default', 1800], ['1,500 kcal', 1500], ['1,650 kcal', 1650], ['1,900 kcal', 1900]],
-    f: () => [{ l: 'Calories per day', n: 1, val: S.goal }],
+    p: [['Plan Default', 0], ['1,500 kcal', 1500], ['1,650 kcal', 1650], ['1,800 kcal', 1800], ['1,900 kcal', 1900]],
+    f: () => [{ l: 'Calories per day (0 or blank = Plan Default)', n: 1, p: 'Plan Default (' + DT[S.mp].k + ')', val: S.goal || '' }],
     ok: v => {
-      const g = +v[0];
-      if (!(g >= 1200 && g <= 4000)) { showToast('Goal must be 1,200–4,000 kcal'); return false; }
-      S.goal = g; showToast('Goal updated 🎯');
+      const g = v[0] === '' ? 0 : +v[0];
+      if (g !== 0 && !(g >= 1200 && g <= 4000)) { showToast('Goal must be 1,200–4,000 kcal (or 0 for Plan Default)'); return false; }
+      S.goal = g; showToast(g ? 'Goal updated 🎯' : 'Using plan default calories 🎯');
     }
   },
   note: {
@@ -2159,7 +2157,7 @@ const SH = {
   cfg: {
     t: 'Settings & Backup',
     customHtml: () => `
-      <label>Daily Calorie Target<input id="cfg_g" inputmode="numeric" value="${S.goal || 1800}"></label>
+      <label>Daily Calorie Target (blank or 0 = Plan Default)<input id="cfg_g" inputmode="numeric" placeholder="Plan Default" value="${S.goal || ''}"></label>
       <div class="swp-l" style="margin-top:2px">Backup</div>
       <div style="display:flex;gap:8px;margin-bottom:8px">
         <button type="button" class="chip" style="flex:1;padding:10px" data-a="expFile">⬇ Export backup</button>
@@ -2169,8 +2167,8 @@ const SH = {
       <button type="button" class="chip" style="width:100%;padding:10px;margin-bottom:12px" data-a="rstWk">↺ Reset This Week</button>
       <input type="file" id="cfg_file" accept=".json,application/json" hidden>`,
     ok: () => {
-      const g = +$('#cfg_g').value;
-      if (!(g >= 1200 && g <= 4000)) { showToast('Goal must be 1,200–4,000 kcal'); return false; }
+      const raw = $('#cfg_g').value.trim(), g = raw === '' ? 0 : +raw;
+      if (g !== 0 && !(g >= 1200 && g <= 4000)) { showToast('Goal must be 1,200–4,000 kcal (or blank for default)'); return false; }
       S.goal = g;
       showToast('Settings saved ✨');
     }
@@ -2196,7 +2194,7 @@ function openSheet(m) {
   SS.to(0, 1, 0.36);
   /* Auto-focus first text input smoothly after sheet spring starts */
   setTimeout(() => {
-    const inp = sh.querySelector('input:not(#cfg_imp)');
+    const inp = sh.querySelector('input:not([type="hidden"]):not([type="file"])');
     if (inp && window.innerWidth > 480) inp.focus();
   }, 180);
 }
@@ -2277,7 +2275,6 @@ document.addEventListener('click', e => {
     return;
   }
   if (a === 'tab') return go(i);
-  if (a === 'bn') { SH.burn.t = 'Calories burned (' + WK[S.pd] + ')'; return openSheet('burn'); }
   if (a === 'am') return openSheet('meal');
   if (a === 'g') return openSheet('goal');
   if (a === 'wt') return openSheet('wt');
@@ -2310,7 +2307,7 @@ document.addEventListener('click', e => {
   if (a === 'impFile') { $('#cfg_file').click(); return; }
   if (a === 'rstWk') {
     if (!confirm('Reset this week’s workouts, meals, water and extras?')) return;
-    S.done = {}; S.eat = {}; S.burns = {}; S.waters = {}; S.mealsByDay = {}; S.swaps = {};
+    S.done = {}; S.eat = {}; S.waters = {}; S.mealsByDay = {}; S.swaps = {};
     save(); render(); closeSheet(); showToast('Week reset ↺');
     return;
   }
@@ -2338,7 +2335,7 @@ document.addEventListener('click', e => {
       if ($('#sh_p')) { $('#sh_p').value = p[4] || 0; $('#sh_c').value = p[5] || 0; $('#sh_f').value = p[6] || 0; }
     } else {
       const inp = sh.querySelector('#sf input');
-      if (inp) inp.value = (cfg === SH.burn && p[1] > 0) ? (+inp.value || 0) + p[1] : p[1];
+      if (inp) inp.value = p[1];
     }
     return;
   }

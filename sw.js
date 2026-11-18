@@ -1,5 +1,5 @@
 /* Blushy service worker: offline app shell + font caching. Bump VERSION when you change index.html. */
-const VERSION = 'blushy-v2';
+const VERSION = 'blushy-v3';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icons/icon-192.png', './icons/icon-512.png', './icons/icon-maskable-512.png', './icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {
@@ -21,20 +21,33 @@ self.addEventListener('fetch', e => {
       // network first (so updates show up), fall back to the cached app when offline or slow
       e.respondWith(
         Promise.race([fetch(req), new Promise((_, rej) => setTimeout(rej, 4000))])
-          .then(res => { const copy = res.clone(); caches.open(VERSION).then(c => c.put('./index.html', copy)); return res; })
+          .then(res => {
+            if (res && res.ok) {
+              const copy1 = res.clone(), copy2 = res.clone();
+              caches.open(VERSION).then(c => { c.put('./index.html', copy1); c.put('./', copy2); });
+            }
+            return res;
+          })
           .catch(() => caches.match('./index.html').then(r => r || caches.match('./')))
       );
       return;
     }
     e.respondWith(caches.match(req).then(hit => hit || fetch(req).then(res => {
-      const copy = res.clone(); caches.open(VERSION).then(c => c.put(req, copy)); return res;
+      if (res && res.ok) {
+        const copy = res.clone();
+        caches.open(VERSION).then(c => c.put(req, copy));
+      }
+      return res;
     })));
     return;
   }
 
   if (FONT_HOSTS.includes(url.hostname)) {
     e.respondWith(caches.open(VERSION).then(c => c.match(req).then(hit => {
-      const net = fetch(req).then(res => { c.put(req, res.clone()); return res; }).catch(() => hit);
+      const net = fetch(req).then(res => {
+        if (res && res.ok) c.put(req, res.clone());
+        return res;
+      }).catch(() => hit);
       return hit || net;
     })));
   }
