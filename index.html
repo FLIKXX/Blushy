@@ -2157,34 +2157,21 @@ const SH = {
   },
   nut: { t: 'Nutrition', btn: 'Done', customHtml: () => nutHtml(), ok: () => {} },
   cfg: {
-    t: 'Settings & Data Backup',
+    t: 'Settings & Backup',
     customHtml: () => `
       <label>Daily Calorie Target<input id="cfg_g" inputmode="numeric" value="${S.goal || 1800}"></label>
-      <div style="display:flex;gap:8px;margin-bottom:12px">
-        <button type="button" class="chip" style="flex:1;padding:10px" data-a="expJson">📋 Copy Backup JSON</button>
-        <button type="button" class="chip" style="flex:1;padding:10px" data-a="rstWk">↺ Reset This Week</button>
+      <div class="swp-l" style="margin-top:2px">Backup</div>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <button type="button" class="chip" style="flex:1;padding:10px" data-a="expFile">⬇ Export backup</button>
+        <button type="button" class="chip" style="flex:1;padding:10px" data-a="impFile">⬆ Import backup</button>
       </div>
-      <label>Restore Backup (paste JSON here optional)<input id="cfg_imp" placeholder='{"v":4,"goal":1800...}'></label>`,
+      <p class="nt-note" style="margin:0 0 12px">Export saves everything (workouts, meals, weights, profile) as a file. Import that file on any device to restore it.</p>
+      <button type="button" class="chip" style="width:100%;padding:10px;margin-bottom:12px" data-a="rstWk">↺ Reset This Week</button>
+      <input type="file" id="cfg_file" accept=".json,application/json" hidden>`,
     ok: () => {
       const g = +$('#cfg_g').value;
       if (!(g >= 1200 && g <= 4000)) { showToast('Goal must be 1,200–4,000 kcal'); return false; }
       S.goal = g;
-      const imp = $('#cfg_imp').value.trim();
-      if (imp) {
-        try {
-          const parsed = JSON.parse(imp);
-          if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-            S = parsed;
-            initOrMigrate();
-            if (S.theme) document.documentElement.setAttribute('data-theme', S.theme);
-            syncThemeIcon();
-            showToast('Backup restored 🎉');
-            return;
-          }
-        } catch (e) {}
-        showToast('That backup JSON is not valid');
-        return false;
-      }
       showToast('Settings saved ✨');
     }
   }
@@ -2304,21 +2291,23 @@ document.addEventListener('click', e => {
     activeSwapIdx = i;
     return openSheet('swap');
   }
-  if (a === 'expJson') {
-    const str = JSON.stringify(S);
-    const done = ok => showToast(ok ? 'Backup JSON copied 📋' : 'Copy failed. Try again');
-    const fallback = () => {
-      const ta = document.createElement('textarea');
-      ta.value = str; ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
-      document.body.appendChild(ta); ta.focus(); ta.select(); ta.setSelectionRange(0, str.length);
-      let ok = false;
-      try { ok = document.execCommand('copy'); } catch (err) {}
-      ta.remove(); done(ok);
+  if (a === 'expFile') {
+    const n = new Date(), pad = x => String(x).padStart(2, '0');
+    const name = `blushy-backup-${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())}.json`;
+    const file = new File([JSON.stringify({ app: 'blushy', format: 1, exported: n.toISOString(), data: S }, null, 2)], name, { type: 'application/json' });
+    const download = () => {
+      const url = URL.createObjectURL(file), link = document.createElement('a');
+      link.href = url; link.download = name;
+      document.body.appendChild(link); link.click(); link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      showToast('Backup saved ⬇');
     };
-    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(str).then(() => done(true), fallback);
-    else fallback();
+    if (/iphone|ipad|ipod/i.test(navigator.userAgent) && navigator.canShare && navigator.canShare({ files: [file] })) {
+      navigator.share({ files: [file], title: 'Blushy backup' }).catch(err => { if (err && err.name !== 'AbortError') download(); });
+    } else download();
     return;
   }
+  if (a === 'impFile') { $('#cfg_file').click(); return; }
   if (a === 'rstWk') {
     if (!confirm('Reset this week’s workouts, meals, water and extras?')) return;
     S.done = {}; S.eat = {}; S.burns = {}; S.waters = {}; S.mealsByDay = {}; S.swaps = {};
@@ -2520,6 +2509,26 @@ render();
 
 document.addEventListener('visibilitychange', () => { if (!document.hidden && roll()) { save(); render(); } });
 setInterval(() => { if (roll()) { save(); render(); } }, 60000);
+
+document.addEventListener('change', async e => {
+  if (!e.target || e.target.id !== 'cfg_file') return;
+  const f = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  if (f.size > 5e6) { showToast('That file is too big to be a backup'); return; }
+  let parsed;
+  try { parsed = JSON.parse(await f.text()); } catch (err) { showToast('That file isn’t a valid backup'); return; }
+  const data = parsed && parsed.app === 'blushy' && parsed.data ? parsed.data : parsed;
+  if (!data || typeof data !== 'object' || Array.isArray(data) || typeof data.v !== 'number') { showToast('That file isn’t a Blushy backup'); return; }
+  const when = parsed.exported ? ' from ' + new Date(parsed.exported).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+  if (!confirm('Replace everything in the app with this backup' + when + '?')) return;
+  S = data;
+  initOrMigrate();
+  if (S.theme) document.documentElement.setAttribute('data-theme', S.theme);
+  syncThemeIcon();
+  save(); render(); closeSheet();
+  showToast('Backup restored 🎉');
+});
 
 /* ---------- PWA: service worker + install button ---------- */
 if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
